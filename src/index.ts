@@ -160,13 +160,22 @@ server.resource(
   }
 );
 
-// Add a tool for running read-only scripts
-server.tool(
+// Add a tool for running predefined (allowlisted) scripts.
+// NOTE: not read-only — the allowlist includes scripts that modify or delete project content.
+server.registerTool(
   "run-script",
-  "Run a read-only script in After Effects",
   {
-    script: z.string().describe("Name of the predefined script to run"),
-    parameters: z.record(z.string(), z.unknown()).optional().describe("Optional parameters for the script")
+    title: "Run predefined After Effects script",
+    description:
+      "Run a predefined After Effects script by name (allowlisted). Some scripts only read project data " +
+      "(listCompositions, getProjectInfo, getLayerInfo), but many modify the project — creating layers and " +
+      "compositions, changing properties, keyframes, expressions and masks, applying effects — and deleteLayer " +
+      "deletes content.",
+    inputSchema: {
+      script: z.string().describe("Name of the predefined script to run"),
+      parameters: z.record(z.string(), z.unknown()).optional().describe("Optional parameters for the script")
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
   },
   async ({ script, parameters = {} }) => {
     // Validate that script is safe (only allow predefined scripts)
