@@ -1239,10 +1239,133 @@ if (typeof JSON === "undefined") {
     JSON = {};
 }
 if (typeof JSON.parse !== "function") {
-    JSON.parse = function (text) {
-        // Safe-ish fallback for trusted input (our own command file)
-        return eval("(" + text + ")");
-    };
+    // Strict recursive-descent JSON parser. Never evaluates input as code, so a
+    // tampered command file can at worst fail to parse - it cannot run script.
+    JSON.parse = (function () {
+        var text, at, ch;
+        var escapes = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+
+        function error(msg) {
+            throw new SyntaxError("JSON.parse: " + msg + " at position " + at);
+        }
+        function next(expected) {
+            if (expected && expected !== ch) error("expected '" + expected + "' but got '" + ch + "'");
+            ch = text.charAt(at);
+            at += 1;
+            return ch;
+        }
+        function white() {
+            while (ch && (ch === " " || ch === "\t" || ch === "\n" || ch === "\r")) next();
+        }
+        function number() {
+            var s = "";
+            if (ch === "-") { s = "-"; next("-"); }
+            if (ch === "0") {
+                s += ch; next();
+            } else if (ch >= "1" && ch <= "9") {
+                while (ch >= "0" && ch <= "9") { s += ch; next(); }
+            } else {
+                error("bad number");
+            }
+            if (ch === ".") {
+                s += "."; next();
+                if (!(ch >= "0" && ch <= "9")) error("bad number");
+                while (ch >= "0" && ch <= "9") { s += ch; next(); }
+            }
+            if (ch === "e" || ch === "E") {
+                s += ch; next();
+                if (ch === "-" || ch === "+") { s += ch; next(); }
+                if (!(ch >= "0" && ch <= "9")) error("bad number");
+                while (ch >= "0" && ch <= "9") { s += ch; next(); }
+            }
+            return +s;
+        }
+        function string() {
+            var s = "", hex, i, uffff;
+            if (ch !== '"') error("bad string");
+            while (next()) {
+                if (ch === '"') { next(); return s; }
+                if (ch === "\\") {
+                    next();
+                    if (ch === "u") {
+                        uffff = 0;
+                        for (i = 0; i < 4; i += 1) {
+                            hex = parseInt(next(), 16);
+                            if (!isFinite(hex)) error("bad unicode escape");
+                            uffff = uffff * 16 + hex;
+                        }
+                        s += String.fromCharCode(uffff);
+                    } else if (escapes.hasOwnProperty(ch)) {
+                        s += escapes[ch];
+                    } else {
+                        error("bad escape");
+                    }
+                } else if (ch < " ") {
+                    error("control character in string");
+                } else {
+                    s += ch;
+                }
+            }
+            error("unterminated string");
+        }
+        function word() {
+            var w = ch === "t" ? "true" : ch === "f" ? "false" : ch === "n" ? "null" : null;
+            if (!w) error("unexpected '" + ch + "'");
+            for (var i = 0; i < w.length; i++) next(w.charAt(i));
+            return w === "true" ? true : w === "false" ? false : null;
+        }
+        function array() {
+            var arr = [];
+            next("[");
+            white();
+            if (ch === "]") { next("]"); return arr; }
+            while (ch) {
+                arr.push(value());
+                white();
+                if (ch === "]") { next("]"); return arr; }
+                next(",");
+                white();
+            }
+            error("unterminated array");
+        }
+        function object() {
+            var obj = {}, key;
+            next("{");
+            white();
+            if (ch === "}") { next("}"); return obj; }
+            while (ch) {
+                key = string();
+                white();
+                next(":");
+                obj[key] = value();
+                white();
+                if (ch === "}") { next("}"); return obj; }
+                next(",");
+                white();
+            }
+            error("unterminated object");
+        }
+        function value() {
+            white();
+            switch (ch) {
+                case "{": return object();
+                case "[": return array();
+                case '"': return string();
+                case "-": return number();
+                default: return (ch >= "0" && ch <= "9") ? number() : word();
+            }
+        }
+
+        return function (source) {
+            text = String(source);
+            at = 0;
+            ch = " ";
+            var result = value();
+            white();
+            if (ch) error("unexpected trailing content");
+            return result;
+        };
+    })();
 }
 if (typeof JSON.stringify !== "function") {
     (function () {
@@ -1726,9 +1849,7 @@ function checkForCommands() {
             commandFile.close();
             
             if (content) {
-                var commandData = (typeof JSON !== "undefined" && JSON.parse)
-                    ? JSON.parse(content)
-                    : eval("(" + content + ")");
+                var commandData = JSON.parse(content);
                 
                 // Only execute pending commands
                 if (commandData.status === "pending") {
